@@ -17,3 +17,6 @@ source .venv/bin/activate
 # Start Server with auto reload:
 uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
+
+## Setting up.
+- Check `spotify_redirect_uri` and setup accordingly.

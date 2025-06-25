@@ -1,0 +1,6 @@
+spotify_client_id: "SPOTIFY_CLIENT_ID"
+spotify_client_secret: "SPOTIFY_CLIENT_SECRET"
+spotify_redirect_uri: "http://127.0.0.1:8000/auth/spotify/callback"
+
+# Update the redirect uri so that it should match the uri you are visiting the server from the browser
+# also configure it in the SPOTIFY DEVELOPER DASHBOARD

@@ -163,6 +163,34 @@ class MPVMediaPlayer:
     def is_running(self):
         return self.process is not None and self.process.poll() is None
 
+    def get_volume(self) -> Optional[float]:
+        """Get the current volume level of mpv."""
+        try:
+            with socket.socket(socket.AF_UNIX) as client:
+                client.connect(self.ipc_path)
+                command = {"command": ["get_property", "volume"]}
+                client.sendall((json.dumps(command) + '\n').encode('utf-8'))
+                response = client.makefile().readline()
+                result = json.loads(response)
+                return result.get("data")
+        except Exception as e:
+            print(f"⚠️ Failed to get volume: {e}")
+            return None
+
+    def get_progress(self) -> Optional[float]:
+        """Get the current playback position (in seconds) from mpv."""
+        try:
+            with socket.socket(socket.AF_UNIX) as client:
+                client.connect(self.ipc_path)
+                command = {"command": ["get_property", "time-pos"]}
+                client.sendall((json.dumps(command) + '\n').encode('utf-8'))
+                response = client.makefile().readline()
+                result = json.loads(response)
+                return result.get("data")
+        except Exception as e:
+            print(f"⚠️ Failed to get playback progress: {e}")
+            return None
+
 
 
 # Test runner
