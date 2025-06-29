@@ -43,11 +43,11 @@ tags_metadata = [
 class PlayerInfo(BaseModel):
     status: Optional[str] = None
     current_media_type: Optional[str] = None
-    volume: Optional[int] = None
+    volume: Optional[int] = 0
     is_paused: bool = False
     cache_size: int = 0
-    media_name: Optional[str] = None
-    media_uploader: Optional[Any] = None
+    media_name: Optional[str] = ""
+    media_uploader: Optional[Any] = ""
     media_duration: int = 0  # string default as "0"
     media_progress: int = 0
     is_live: Optional[bool] = False
@@ -217,7 +217,6 @@ def play_media(MediaData: Optional[MediaData] = Body(None)):
                 player_info.media_progress = 0
                 player_info.media_url = media.get("webpage_url")
                 
-                player_info.volume = player_instance.get_volume()
                 
                 player_info.current_media_type = "youtube"
                 is_live = media.get("is_live", False)
@@ -227,6 +226,10 @@ def play_media(MediaData: Optional[MediaData] = Body(None)):
                 # UNLOAD PREVIOUS MEDIA IF ANY
                 player_instance = None
                 player_instance = MPVMediaPlayer(media.get("webpage_url"))
+                
+                player_info.volume = player_instance.get_volume()
+                
+                
                 player_instance.play()
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"Failed to play media: {str(e)}")
@@ -236,6 +239,7 @@ def play_media(MediaData: Optional[MediaData] = Body(None)):
             pass
             # SET LAST PLAYED DATA
             global last_played_media
+            
             last_played_media.title = media.get("title")
             last_played_media.url = media.get("webpage_url")
             
@@ -321,10 +325,7 @@ def play_media(MediaData: Optional[MediaData] = Body(None)):
         if yt_url and media:
             # PLAY THE PLAYER
             try:
-                
-                
-                
-                
+                           
                 # SET STATE TODO
                 player_info.status = "playing"
                 player_info.media_name = str(media.get("title"))
@@ -555,3 +556,7 @@ def spotify_callback(request: Request):
         """)
     except Exception as e:
         return HTMLResponse(f"<h3>Error exchanging code for token: {e}</h3>", status_code=500)
+    
+@app.get("/youtube")
+def yt_feed():
+    pass
