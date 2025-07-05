@@ -10,6 +10,8 @@ import shutil
 import json
 from mediaplayer import MPVMediaPlayer
 
+from command import open_sp_client, control_playerctl, IGNORE_PLAYERS
+
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from spotipy.oauth2 import SpotifyOAuth
@@ -23,7 +25,12 @@ from functions import search_youtube_url
 
 from templates import render_spotify_setup_page
 
+
 version="0.1.0"
+
+config = load_config()
+spotify_mode = config["spotify_mode"]
+control_mode = config["control_mode"]
 
 tags_metadata = [
     {
@@ -63,6 +70,58 @@ player_info = PlayerInfo(
 
 class MediaData(BaseModel):
     url: str = Field(..., description="The URL of the media to play. Supported sources: YouTube, Spotify.")
+
+# PLAYERCTL DATA
+def get_playerctl_data(player: Optional[str] = None) -> PlayerInfo:
+    
+    time.sleep(0.5) 
+    # To settle the playing state, since dbus is updated asynchronously,
+    # so calling it instantly after setting state will still return the previous value.
+    
+    def run_playerctl_command(args):
+        cmd = ["playerctl", f"--ignore-player={IGNORE_PLAYERS}"]
+        if player:
+            cmd += ["--player", player]
+        cmd += args
+        try:
+            return subprocess.check_output(cmd, text=True).strip()
+        except subprocess.CalledProcessError:
+            return None
+        except FileNotFoundError:
+            print("playerctl not found.")
+            return None
+
+    # Fetch data
+    status = run_playerctl_command(["status"]) or "Stopped"
+    title = run_playerctl_command(["metadata", "xesam:title"]) or ""
+    artist = run_playerctl_command(["metadata", "xesam:artist"]) or ""
+    url = run_playerctl_command(["metadata", "xesam:url"]) or ""
+    volume = run_playerctl_command(["volume"]) or "0"
+    duration_us = run_playerctl_command(["metadata", "mpris:length"]) or "0"
+    position_us = run_playerctl_command(["position"]) or "0"
+
+    # Convert microseconds to seconds
+    def to_seconds(us):
+        try:
+            return int(float(us)) // 1_000_000
+        except (ValueError, TypeError):
+            return 0
+
+    # Final object
+    return PlayerInfo(
+        status=status.lower(),
+        current_media_type="audio",  # You can detect more accurately if needed
+        volume=int(float(volume) * 100),  # Convert to 0–100 scale
+        is_paused=(status.lower() != "playing"),
+        cache_size=0,  # You can implement this if relevant
+        media_name=title,
+        media_uploader=artist,
+        media_duration=to_seconds(duration_us),
+        media_progress=to_seconds(position_us),
+        media_url=url
+    )
+    
+# NOTE: When using MPRIS to control set the is_live parameter manually by checking YT api
 
 
 class MediaInfo(BaseModel):
@@ -117,11 +176,8 @@ def get_media_data(url: str) -> Optional[MediaInfo]:
         media_info.channel=data.get("channel", data.get("channel_id")),  # fallback if channel is missing
         media_info.url=data.get("webpage_url"),
         media_info.video_id=extract_youtube_id(url)  # Extract YouTube ID for reference
-
-        return data
         
-
-
+        return data
     except subprocess.TimeoutExpired:
         print("yt-dlp metadata fetch timed out")
         return None
@@ -163,16 +219,20 @@ def player_status():
     """
     Get the current status of the media player.
     """
-    # Placeholder for actual player status logic
-    global player_instance
     global player_info
     
-    if player_instance is not None:
-        player_info.volume = int(player_instance.get_volume())
-        player_info.media_progress = int(player_instance.get_progress())
+    if control_mode == "mpris":
+        player_info = get_playerctl_data("spotify")
+        return player_info
+    else:
+        global player_instance
         
-    
-    return player_info
+        if player_instance is not None:
+            player_info.volume = int(player_instance.get_volume())
+            player_info.media_progress = int(player_instance.get_progress())
+            
+        
+        return player_info
     
 @app.post("/player/play")
 def play_media(MediaData: Optional[MediaData] = Body(None)):
@@ -180,17 +240,23 @@ def play_media(MediaData: Optional[MediaData] = Body(None)):
     Play media in the player.
     """
     global player_instance
+    global player_info
     
     # ----------------------------------- #
     
     #  TODO IF player is already initialised then just play the media
-    if player_instance is not None and not MediaData:
-        player_instance.play()
+    if control_mode == "mpris" and not MediaData:
+        control_playerctl("play-pause")
+        player_info =  get_playerctl_data()
+        return player_info
+    else:
+        if player_instance is not None and not MediaData:
+            player_instance.play()
     
     if MediaData is None or not MediaData.url:
         raise HTTPException(status_code=400, detail="Media URL is required.")
-        
-    global player_info
+    
+    # TODO: Add MPRIS control here. (toggle)
     if player_info.is_paused is True:
         player_info.is_paused = False
     
@@ -295,66 +361,73 @@ def play_media(MediaData: Optional[MediaData] = Body(None)):
             raise HTTPException(status_code=400, detail="Invalid Spotify track URL")
         
         track_id = match.group(1)
+        print(f"SPOTIFY TRACK ID: {track_id}")
         
-        try:
-            track = sp.track(track_id)
-            print("Fetched track info from Spotify")
-            if not track:
-                raise HTTPException(status_code=404, detail="Could not retrieve Spotify track info")
-            title = track['name']
-            artist = track['artists'][0]['name']
-            search_query = f"{title} {artist}"
-        except Exception as e:
-            print(f"Error fetching Spotify track info: {e}")
-            raise HTTPException(status_code=404, detail="Could not retrieve Spotify track info")
-        
-        print(f"Searching YouTube for: {search_query}")
-        
-        yt_url = search_youtube_url(search_query)
-        
-        print(f"yt_url: {yt_url}")
-        
-        if not yt_url:
-            raise HTTPException(status_code=404, detail="Could not find a matching YouTube video")
-        
-        print(f"{title} - {artist}")
-        url = yt_url
-        # THEN CONTINUE TO YOUTUBE HANDLING
-        media = get_media_data(url)
-        
-        if yt_url and media:
-            # PLAY THE PLAYER
-            try:
-                           
-                # SET STATE TODO
-                player_info.status = "playing"
-                player_info.media_name = str(media.get("title"))
-                player_info.media_uploader = media.get("uploader"),
-                player_info.media_duration = int(float(media.get("duration", 0)))
-                player_info.media_progress = 0
-                player_info.media_url = media.get("webpage_url")
-                
-                player_info.current_media_type = "spotify"
-                is_live = media.get("is_live", False)
-                player_info.is_live = is_live
-                
-                
-                # UNLOAD PREVIOUS MEDIA IF ANY
-                player_instance = None
-                player_instance = MPVMediaPlayer(yt_url)
-                player_instance.play()
-                
-                player_info.volume = player_instance.get_volume()
-                
-            except Exception as e:
-                raise HTTPException(status_code=500, detail=f"Failed to play media: {str(e)}")
-            
-            
-            # SET LAST PLAYED DATA
-            last_played_media.title = media.get("title")
-            last_played_media.url = media.get("webpage_url")
-            
+        if spotify_mode == "sp_client":
+            open_sp_client(track_id)
+            player_info = get_playerctl_data()
             return player_info
+        else:
+            # HANDLING SPOTIFY PLAYBACK with YT-DLP
+            try:
+                track = sp.track(track_id)
+                print("Fetched track info from Spotify")
+                if not track:
+                    raise HTTPException(status_code=404, detail="Could not retrieve Spotify track info")
+                title = track['name']
+                artist = track['artists'][0]['name']
+                search_query = f"{title} {artist}"
+            except Exception as e:
+                print(f"Error fetching Spotify track info: {e}")
+                raise HTTPException(status_code=404, detail="Could not retrieve Spotify track info")
+            
+            print(f"Searching YouTube for: {search_query}")
+            
+            yt_url = search_youtube_url(search_query)
+            
+            print(f"yt_url: {yt_url}")
+            
+            if not yt_url:
+                raise HTTPException(status_code=404, detail="Could not find a matching YouTube video")
+            
+            print(f"{title} - {artist}")
+            url = yt_url
+            # THEN CONTINUE TO YOUTUBE HANDLING
+            media = get_media_data(url)
+            
+            if yt_url and media:
+                # PLAY THE PLAYER
+                try:
+                            
+                    # SET STATE TODO
+                    player_info.status = "playing"
+                    player_info.media_name = str(media.get("title"))
+                    player_info.media_uploader = media.get("uploader"),
+                    player_info.media_duration = int(float(media.get("duration", 0)))
+                    player_info.media_progress = 0
+                    player_info.media_url = media.get("webpage_url")
+                    
+                    player_info.current_media_type = "spotify"
+                    is_live = media.get("is_live", False)
+                    player_info.is_live = is_live
+                    
+                    
+                    # UNLOAD PREVIOUS MEDIA IF ANY
+                    player_instance = None
+                    player_instance = MPVMediaPlayer(yt_url)
+                    player_instance.play()
+                    
+                    player_info.volume = player_instance.get_volume()
+                    
+                except Exception as e:
+                    raise HTTPException(status_code=500, detail=f"Failed to play media: {str(e)}")
+                
+                
+                # SET LAST PLAYED DATA
+                last_played_media.title = media.get("title")
+                last_played_media.url = media.get("webpage_url")
+                
+                return player_info
         
         
         
@@ -369,84 +442,135 @@ def play_media(MediaData: Optional[MediaData] = Body(None)):
     
 @app.post("/player/pause")
 def pause_player():
-    global player_instance
-    if player_instance is None:
-        raise HTTPException(status_code=400, detail="No media is currently loaded")
-    try:
-        global player_info
-        player_info.is_paused = True
-        player_info.status = "paused"
-        
-        player_info.volume = player_instance.get_volume()
-        
-        player_instance.pause()
-        
+    global player_info
+    
+    if control_mode == "mpris":
+        control_playerctl("pause")
+        player_info = get_playerctl_data()
         return player_info
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to execute pause: {str(e)}")
+    else:
+        global player_instance
+        if player_instance is None:
+            raise HTTPException(status_code=400, detail="No media is currently loaded")
+        try:
+            
+            player_info.is_paused = True
+            player_info.status = "paused"
+            
+            player_info.volume = player_instance.get_volume()
+            
+            player_instance.pause()
+            
+            return player_info
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to execute pause: {str(e)}")
 
 @app.post("/player/stop")
 def stop_player():
-    global player_instance
-    if player_instance is None:
-        raise HTTPException(status_code=400, detail="No media is currently loaded")
-    try:
-        player_instance.stop()
-        player_instance = None  # Reset the player instance
-        
-        global player_info
-        # Reset the STATE
-        player_info = PlayerInfo()
-        player_info.status = "stopped"
-        
+    global player_info
+    
+    if control_mode == "mpris":
+        control_playerctl("stop")
+        player_info = get_playerctl_data()
         return player_info
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to execute stop: {str(e)}")
+    else:
+        global player_instance
+        if player_instance is None:
+            raise HTTPException(status_code=400, detail="No media is currently loaded")
+        try:
+            player_instance.stop()
+            player_instance = None  # Reset the player instance
+            
+            
+            # Reset the STATE
+            player_info = PlayerInfo()
+            player_info.status = "stopped"
+            
+            return player_info
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to execute stop: {str(e)}")
     
 @app.post("/player/replay")
 def replay_player():
-    global player_instance
-    try:
-        if player_instance is not None:
-        # Unloading and loading just to be safe
-        # ideally it should just seek to zero.
-            player_instance = None
+    if control_mode == "mpris":
+        # control_playerctl("pause")
+        return {"player_info": "TODO, pending application"}
+    else:
+        global player_instance
+        try:
+            if player_instance is not None:
+            # Unloading and loading just to be safe
+            # ideally it should just seek to zero.
+                player_instance = None
+                
+            global player_info
+            if player_info.is_paused is True:
+                player_info.is_paused = False
             
-        global player_info
-        if player_info.is_paused is True:
-            player_info.is_paused = False
-        
-        player_info.status = "replay"
-        player_info.media_url = last_played_media.url
-        player_info.media_name = last_played_media.title
-        
-        
-        
-        player_instance = MPVMediaPlayer(last_played_media.url)
-        player_instance.play()
-        
-        player_info.volume = player_instance.get_volume()
-        
-        return player_info
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to execute replay: {str(e)}")
+            player_info.status = "replay"
+            player_info.media_url = last_played_media.url
+            player_info.media_name = last_played_media.title
+            
+            
+            
+            player_instance = MPVMediaPlayer(last_played_media.url)
+            player_instance.play()
+            
+            player_info.volume = player_instance.get_volume()
+            
+            return player_info
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to execute replay: {str(e)}")
     
 @app.post("/player/volume")
 def set_volume(set: int = Query(..., ge=0, le=150, description="Volume percent (0-150)")):
-    global player_instance
     global player_info
-    if player_instance is None or not player_instance.is_running():
-        raise HTTPException(status_code=400, detail="No media is currently loaded or player has stopped")
-    if not (0 <= set <= 150):
-        raise HTTPException(status_code=400, detail="Volume must be between 0 and 150")
-    try:
-        player_instance._send_ipc_command({"command": ["set_property", "volume", set]})
-        player_info.volume = player_instance.get_volume()
-        # return {"status": f"Volume set to {set}%"}
-        return player_info
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to set volume: {str(e)}")
+    
+    if control_mode == "mpris":
+        # control_playerctl("pause")
+        # convert the number into a decimal.
+        if not (0 <= set <= 150):
+            raise HTTPException(status_code=400, detail="Volume must be between 0 and 150")
+        
+        scaled_vol = set / 100
 
+        control_playerctl(f"volume {scaled_vol}")
+        player_info = get_playerctl_data()
+        return player_info
+    else:
+        global player_instance
+        
+        if player_instance is None or not player_instance.is_running():
+            raise HTTPException(status_code=400, detail="No media is currently loaded or player has stopped")
+        if not (0 <= set <= 150):
+            raise HTTPException(status_code=400, detail="Volume must be between 0 and 150")
+        try:
+            player_instance._send_ipc_command({"command": ["set_property", "volume", set]})
+            player_info.volume = player_instance.get_volume()
+            # return {"status": f"Volume set to {set}%"}
+            return player_info
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to set volume: {str(e)}")
+
+@app.post("/player/next")
+def player_next():
+    if control_mode == "mpris":
+        control_playerctl("next")
+        return {
+            "message": "player next"
+        }
+    else:
+        raise HTTPException(status_code=501, detail="method only available in MPRIS mode")
+    
+@app.post("/player/previous")
+def player_previous():
+    if control_mode == "mpris":
+        control_playerctl("previous")
+        return {
+            "message": "player previous"
+        }
+    else:
+        raise HTTPException(status_code=501, detail="method only available in MPRIS mode")
 # -------------------------------------------- AUTH + SPOTIFY ---------------------------------------------------------- #
 
 @app.post("/setup")

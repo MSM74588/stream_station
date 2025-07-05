@@ -4,3 +4,9 @@ spotify_redirect_uri: "http://127.0.0.1:8000/auth/spotify/callback"
 
 # Update the redirect uri so that it should match the uri you are visiting the server from the browser
 # also configure it in the SPOTIFY DEVELOPER DASHBOARD
+
+# control mode: mpris or mpv
+control_mode: "mpris" 
+
+# Spotify mode: ytdlp or sp_client
+spotify_mode: "sp_client"
