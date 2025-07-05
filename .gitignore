@@ -11,7 +11,14 @@ wheels/
 
 # auth files:
 spotify_auth.yaml
-config.yaml
+config.
+
+# dynamic config files
+mpd.conf
+state/
+
+# Music Folder.
+Music/
 
 # songs db file
 spotify_liked_songs.db
