@@ -68,3 +68,48 @@ https://github.com/rxri/spicetify-extensions/tree/main/adblock
 ## TODO, choose spotify player type:
 - If yt-dlp is selected, it will play the spotify song via ytdlp
 - and if spotify is setup, it will play the song in spotify client.
+
+## Setting up mpd (systemwide)
+- `sudo pacman -S mpd`
+- `mkdir ~/.mpd`
+
+
+`systemctl --user enable --now mpd.socket`
+
+```conf
+#  ~/.config/mpd/mpd.conf
+db_file		"~/.mpd/database"
+log_file "syslog"
+music_directory "~/Music"
+
+playlist_directory "~/.mpd/playlists"
+state_file	"~/.mpd/state"
+sticker_file "~/.mpd/sticker.sql"
+
+auto_update "yes"
+auto_update_depth "0"
+
+port "6600"
+
+# if you want mpd to start paused
+restore_paused "yes"
+
+audio_output {
+	type	"pulse"
+	name	"Music"
+}
+```
+
+- mpd needs to be auto-started (or start the daemon)
+
+- trigger a refresh of db via mpc
+    - `mpc update`
+
+- TROUBLESHOOT
+    - `mpd verbose` -> outputs the config file location
+
+- Now add mpdris2 to add support for mpd control via mpris
+    - `sudo pacman -S mpdris2`
+
+- launch mpdris2 manually.
+

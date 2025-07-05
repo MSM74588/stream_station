@@ -25,7 +25,12 @@ from functions import search_youtube_url
 
 from templates import render_spotify_setup_page
 
+import asyncio
+from contextlib import asynccontextmanager
+import signal
+from pathlib import Path
 
+MPD_PORT = "6601"
 version="0.1.0"
 
 config = load_config()
@@ -70,6 +75,114 @@ player_info = PlayerInfo(
 
 class MediaData(BaseModel):
     url: str = Field(..., description="The URL of the media to play. Supported sources: YouTube, Spotify.")
+
+# ------------ Lifespan handling ------------
+mpdris2_path = shutil.which("mpDris2")
+
+if not mpdris2_path:
+    raise FileNotFoundError("mpDris2 not found in PATH. Please install it (e.g., via pacman or apt).")
+
+mpd_proc: subprocess.Popen | None = None
+mpdirs2_proc: subprocess.Popen | None = None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global mpd_proc, mpdirs2_proc
+
+    # --- Setup directories ---
+    project_dir = Path(__file__).resolve().parent
+    music_dir = (project_dir / "Music" ).resolve()
+    music_dir.mkdir(parents=True, exist_ok=True)
+
+    state_dir = project_dir / "state"
+    state_dir.mkdir(exist_ok=True)
+
+    # --- Write mpd.conf dynamically ---
+    mpd_config = project_dir / "mpd.conf"
+    mpd_config.write_text(f"""
+music_directory        "{music_dir}"
+playlist_directory     "{state_dir}/playlists"
+db_file                "{state_dir}/database"
+log_file               "{state_dir}/mpd.log"
+pid_file               "{state_dir}/mpd.pid"
+state_file             "{state_dir}/state"
+sticker_file           "{state_dir}/sticker.sql"
+bind_to_address        "127.0.0.1"
+port                   "{MPD_PORT}"
+
+auto_update "yes"
+auto_update_depth "0"
+""")
+
+    # --- Start MPD ---
+    mpd_proc = subprocess.Popen(
+        ["mpd", "--no-daemon", str(mpd_config)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+
+    # Wait for MPD socket to become available
+    for _ in range(20):
+        if mpd_proc.poll() is not None:
+            raise RuntimeError("MPD exited early — check mpd.conf or logs")
+        try:
+            reader, writer = await asyncio.open_connection("127.0.0.1", 6601)
+            writer.close()
+            await writer.wait_closed()
+            break
+        except OSError:
+            await asyncio.sleep(0.1)
+    else:
+        raise RuntimeError("MPD socket did not become available")
+
+    print(f"✅ MPD started with music dir: {music_dir}")
+
+    # --- Run `mpc update` to update the DB ---
+    try:
+        subprocess.run(["mpc", "-h", "127.0.0.1", "-p", f"{MPD_PORT}", "update"], check=True)
+        print("📂 MPD music database updated")
+    except subprocess.CalledProcessError as e:
+        print(f"⚠️ Failed to run `mpc update`: {e}")
+
+    # --- Start mpdirs2 bound publicly ---
+    # mpdirs2_proc = subprocess.Popen([
+    #     "mpDirs2",
+    #     "--host", "0.0.0.0",
+    #     "--port", "8080",
+    #     "--mpd-host", "127.0.0.1",
+    #     "--mpd-port", "6601",
+    # ])
+    mpdirs2_proc = subprocess.Popen([
+        # HAVE TO ADD python3 as dbus is not available inside venv interpreter.
+        "/usr/bin/python3",
+        mpdris2_path,
+        "--port", f"{MPD_PORT}",
+    ])
+    print("✅ mpdirs2 started at http://<your-ip>:8080")
+
+    yield  # App is now running
+
+    # --- On Shutdown: Stop mpdirs2 ---
+    if mpdirs2_proc and mpdirs2_proc.poll() is None:
+        mpdirs2_proc.send_signal(signal.SIGTERM)
+        try:
+            mpdirs2_proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            mpdirs2_proc.kill()
+            mpdirs2_proc.wait()
+        print("🛑 mpdirs2 stopped")
+
+    # --- On Shutdown: Stop MPD ---
+    if mpd_proc and mpd_proc.poll() is None:
+        mpd_proc.send_signal(signal.SIGTERM)
+        try:
+            mpd_proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            mpd_proc.kill()
+            mpd_proc.wait()
+        print("🛑 MPD stopped")
+        
+# ----------------------------------------------------------------------------- #
 
 # PLAYERCTL DATA
 def get_playerctl_data(player: Optional[str] = None) -> PlayerInfo:
@@ -144,7 +257,8 @@ app = FastAPI(
     title="Stream Station",
     description="System to stream media from YouTube and Spotify to local speakers or Chromecast devices.",
     version=version,
-    openapi_tags=tags_metadata
+    openapi_tags=tags_metadata,
+    lifespan=lifespan
 )
 
 start_time = time.monotonic()
@@ -201,6 +315,10 @@ def extract_youtube_id(url: str) -> str | None:
     return None
 
 
+
+
+
+# -------------------------------------- ROUTES ---------------------------------------------------------- #
 
 @app.get("/", tags=["Server Status"], summary="Get server status")
 def server_status():

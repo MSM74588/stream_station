@@ -1,0 +1,9 @@
+spotify_client_id: "299276512e1141979c1378e08f4c4b21"
+spotify_client_secret: "1d96b38ae2184d769dc4e90287f9123f"
+spotify_redirect_uri: "http://localhost:8000/auth/spotify/callback"
+
+# control mode: mpris or mpv
+control_mode: "mpris" 
+
+# Spotify mode: ytdlp or sp_client
+spotify_mode: "sp_client"
