@@ -61,3 +61,10 @@ https://github.com/rxri/spicetify-extensions/tree/main/adblock
 - `spicetify apply`
 - `spicetify config sidebar_config 0`
 - `spicetify apply`
+
+## OR USE SPOTUBE!! (but no spotify-connect) -> but, got a legal notice.
+- No longer maintained, due to legal notice, but WORK IN PROGRESS.
+
+## TODO, choose spotify player type:
+- If yt-dlp is selected, it will play the spotify song via ytdlp
+- and if spotify is setup, it will play the song in spotify client.
