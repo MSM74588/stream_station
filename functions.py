@@ -12,6 +12,79 @@ from constants import AUTH_PATH, CONFIG_PATH, SPOTIFY_DB_PATH, SPOTIFY_SCOPES
 
 import socket
 
+from constants import LIKED_SONGS_DB_PATH
+import uuid
+from datetime import datetime
+
+def init_liked_songs_db():
+    conn = sqlite3.connect(LIKED_SONGS_DB_PATH)
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS liked_songs (
+            id TEXT PRIMARY KEY,
+            song_name TEXT,
+            artist TEXT,
+            url TEXT,
+            date_added TEXT,
+            type TEXT,
+            cover_art_url TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+def add_liked_song(song_name, url, song_type, artist="", cover_art_url=""):
+    conn = sqlite3.connect(LIKED_SONGS_DB_PATH)
+    c = conn.cursor()
+    # Check for existing song by name (case-insensitive)
+    c.execute("SELECT id FROM liked_songs WHERE LOWER(song_name) = LOWER(?)", (song_name,))
+    existing = c.fetchone()
+    if existing:
+        conn.close()
+        return {
+            "status": "already_added",
+            "message": f"Song '{song_name}' already exists in liked songs.",
+            "id": existing[0]
+        }
+    song_id = str(uuid.uuid4())
+    date_added = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    c.execute(
+        "INSERT INTO liked_songs (id, song_name, artist, url, date_added, type, cover_art_url) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (song_id, song_name, artist, url, date_added, song_type, cover_art_url)
+    )
+    conn.commit()
+    conn.close()
+    return {
+        "id": song_id,
+        "song_name": song_name,
+        "artist": artist,
+        "url": url,
+        "date_added": date_added,
+        "type": song_type,
+        "cover_art_url": cover_art_url,
+        "status": "added"
+    }
+
+def get_all_liked_songs():
+    conn = sqlite3.connect(LIKED_SONGS_DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id, song_name, artist, url, date_added, type, cover_art_url FROM liked_songs")
+    rows = c.fetchall()
+    conn.close()
+    return [
+        {
+            "id": row[0],
+            "song_name": row[1],
+            "artist": row[2],
+            "url": row[3],
+            "date_added": row[4],
+            "type": row[5],
+            "cover_art_url": row[6]
+        }
+        for row in rows
+    ]
+    
+
 def get_lan_ip():
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

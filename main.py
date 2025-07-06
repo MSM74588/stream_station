@@ -10,6 +10,15 @@ import shutil
 import json
 from mediaplayer import MPVMediaPlayer
 
+from fastapi import UploadFile, File
+from fastapi.staticfiles import StaticFiles
+
+from uuid import uuid4
+
+from YTDLP import YTDLPDownloader
+from fastapi import BackgroundTasks
+
+
 from command import open_sp_client, control_playerctl, IGNORE_PLAYERS
 
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -36,6 +45,10 @@ import shlex
 from mutagen import File as MutagenFile
 
 import requests
+
+# Create a global downloader instance
+yt_downloader = YTDLPDownloader()
+MUSIC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "Music"))
 
 MPD_PORT = "6601"
 version="0.1.0"
@@ -88,6 +101,8 @@ class MediaData(BaseModel):
         None, 
         description="Name of the song to search and play from YouTube if URL is not provided."
     )
+
+
 
 # ------------ Lifespan handling ------------
 mpdris2_path = shutil.which("mpDris2")
@@ -280,6 +295,11 @@ app = FastAPI(
     openapi_tags=tags_metadata,
     lifespan=lifespan
 )
+
+# Mount static directory for cover art
+cover_art_dir = Path(__file__).resolve().parent / "liked_songs_cover_art"
+cover_art_dir.mkdir(exist_ok=True)
+app.mount("/liked_songs_cover_art", StaticFiles(directory=str(cover_art_dir)), name="liked_songs_cover_art")
 
 start_time = time.monotonic()
 
@@ -814,7 +834,7 @@ def auth_spotify():
 
 # -------------------------------------- SPOTIFY SONG FETCHING ----------------------------------------------------------- #
 
-@app.get("/get_spotify_songs")
+@app.get("/tasks/fetch_spotify_songs")
 def get_spotify_songs():
     init_spotify_db()
     # If DB is empty, fetch from Spotify and save
@@ -1143,6 +1163,15 @@ def list_songs():
 
     return {"songs": songs}
 
+@app.get("/songs/spotify")
+def get_spotify_saved_songs():
+    from functions import get_songs_from_db
+    songs = get_songs_from_db()
+    if not songs:
+        return {"message": "No Spotify songs found in the database.", "songs": []}
+    return {"songs": songs}
+
+
 @app.get("/album_art")
 def album_art():
     global player_type
@@ -1204,3 +1233,97 @@ def album_art():
     except Exception as e:
         print(f"Unexpected error for {player_type}: {e}")
         return {"error": f"Unexpected error for {player_type}: {e}"}
+
+@app.get("/liked_songs")
+def liked_songs_get():
+    init_liked_songs_db()
+    songs = get_all_liked_songs()
+    if not songs:
+        return {"message": "No liked songs found.", "liked_songs": []}
+    return {"liked_songs": songs}
+
+@app.post("/liked_songs")
+async def liked_songs_post(
+    song_name: str = Body(..., embed=True),
+    artist: str = Body("", embed=True),
+    url: Optional[str] = Body(None, embed=True),
+    image: UploadFile = File(None)
+):
+    init_liked_songs_db()
+    # Determine type
+    if url:
+        if "youtube.com" in url or "youtu.be" in url:
+            song_type = "youtube"
+        elif "spotify.com" in url:
+            song_type = "spotify"
+        else:
+            song_type = "mpd"
+    else:
+        song_type = "mpd"
+        url = ""
+
+    # Handle image upload
+    cover_art_url = ""
+    if image:
+        ext = os.path.splitext(image.filename)[-1]
+        filename = f"{uuid4().hex}{ext}"
+        file_path = cover_art_dir / filename
+        with open(file_path, "wb") as f:
+            f.write(await image.read())
+        cover_art_url = f"/liked_songs_cover_art/{filename}"
+
+    # Save to DB (update your add_liked_song to accept artist and cover_art_url)
+    song = add_liked_song(song_name, url, song_type, artist, cover_art_url)
+    return {"message": "Song added to liked songs.", "song": song}
+
+def run_spotdl(cmd):
+    subprocess.run(cmd)
+
+def run_spotdl_download(url: str, music_dir: Path):
+    """
+    Runs spotdl (optionally via uv tool run) to download a Spotify track.
+    Logs output and errors.
+    """
+    # If you use 'uv tool run spotdl', set this:
+    # cmd = ["uv", "tool", "run", "spotdl", url, "--output", str(music_dir)]
+    # If you use spotdl directly, set this:
+    cmd = ["spotdl", url, "--output", str(music_dir)]
+    print(f"🎵 Downloading: {url}")
+    try:
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        if result.returncode != 0:
+            print(f"⚠️ Error downloading {url}:\n{result.stderr}")
+        else:
+            print(f"✅ Downloaded: {url}")
+    except FileNotFoundError:
+        print("❌ spotdl is not found in PATH. Make sure spotdl is installed.")
+
+@app.post("/download")
+def download_song(
+    url: str = Body(..., embed=True),
+    background_tasks: BackgroundTasks = None
+):
+    if not url:
+        return {"error": "No URL provided."}
+    
+    print(f"Music Directory: {MUSIC_DIR}")
+
+    if "spotify.com" in url:
+        # You can switch to 'uv tool run spotdl' if needed by editing run_spotdl_download
+        background_tasks.add_task(run_spotdl_download, url, MUSIC_DIR)
+        return {"status": "Downloading Spotify song in background...", "url": url}
+
+    elif "youtube.com" in url or "youtu.be" in url:
+        try:
+            yt_downloader.add_to_queue(url)
+            return {"status": "Downloading YouTube audio...", "url": url}
+        except Exception as e:
+            return {"error": f"Failed to start YouTube download: {e}"}
+
+    else:
+        return {"error": "Unsupported URL. Only YouTube and Spotify links are supported."}
