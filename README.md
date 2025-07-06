@@ -130,10 +130,12 @@ audio_output {
 ```bash
 # Test These first.
 
-sudo pacman -Sy --needed mpd mpc mpdris2 playerctl ffmpeg yt-dlp
+sudo pacman -Sy --needed mpd mpc mpdris2 playerctl ffmpeg yt-dlp mpv
 
 uv tool install spotdl
 
 sudo pacman -Sy python-mutagen
+
+yay -S spotify
 ```
 
