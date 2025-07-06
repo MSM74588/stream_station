@@ -114,12 +114,18 @@ audio_output {
 - launch mpdris2 manually.
 
 ## TODO:
-- Download feature
-- Offline Handling
-- Rewrite to sockets so can communicate via IPC sockets
-- MQTT paho support
-- Control Host via LNXLink
-- Arduino HID Media Button Controls
-- HID Display Output.
-- SnapCast Integration
-- Google Chromecast support. via SDK.
+- [x] Download feature
+- [ ] Offline Handling
+- [ ] Rewrite to sockets so can communicate via IPC sockets
+- [ ] MQTT paho support
+- [ ] Control Host via LNXLink
+- [ ] Arduino HID Media Button Controls
+- [ ] HID Display Output.
+- [ ] SnapCast Integration
+- [ ] Google Chromecast support. via SDK.
+
+# Needed Dependencies (incomplete)
+```bash
+# Test These first.
+sudo pacman -S --needed mpd mpc mpdris2 playerctl ffmpeg yt-dlp spotdl mutagen 
+```
