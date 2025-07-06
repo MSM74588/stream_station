@@ -29,5 +29,5 @@ liked_songs.db
 # demo files
 demo/
 
-# cache
-.cacheconfig.yaml
+# Configs
+config.yaml
