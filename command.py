@@ -3,8 +3,9 @@ This file handles the commands that will be run by subprocess
 """
 
 import subprocess
+from typing import Optional
 
-IGNORE_PLAYERS = "Gwenview,firefox"
+IGNORE_PLAYERS = "Gwenview,firefox,GSConnect"
 
 
 
@@ -18,10 +19,10 @@ def open_sp_client(track_id):
     except FileNotFoundError:
         print("xdg-open not found. Make sure you're on a Linux system with xdg-utils installed.")
 
-def control_playerctl(command):
+def control_playerctl(command, player: Optional[str] = "active"):
     import shlex
     try:
-        args = ["playerctl", f"--ignore-player={IGNORE_PLAYERS}"] + shlex.split(command)
+        args = ["playerctl", f"--player={player}",f"--ignore-player={IGNORE_PLAYERS}"] + shlex.split(command)
         subprocess.run(args, check=True)
         print(f"Executed: {' '.join(args)}")
     except subprocess.CalledProcessError as e:
