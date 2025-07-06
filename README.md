@@ -123,6 +123,8 @@ audio_output {
 - [ ] HID Display Output.
 - [ ] SnapCast Integration
 - [ ] Google Chromecast support. via SDK.
+- [ ] Queue (adding via frontend) and then auto sequnce
+- [ ] Repeat Mode set, Shuffle Set.
 
 # Needed Dependencies (incomplete)
 ```bash
