@@ -30,4 +30,4 @@ liked_songs.db
 demo/
 
 # cache
-.cache
+.cacheconfig.yaml
