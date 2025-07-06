@@ -10,6 +10,7 @@ dependencies = [
     "mutagen>=1.47.0",
     "pyyaml>=6.0.2",
     "requests>=2.32.4",
+    "spotdl>=3.9.6",
     "spotipy>=2.25.1",
     "uvicorn>=0.34.3",
     "validators>=0.35.0",

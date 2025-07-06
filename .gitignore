@@ -19,9 +19,12 @@ state/
 
 # Music Folder.
 Music/
+downloads/
+liked_songs_cover_art/
 
 # songs db file
 spotify_liked_songs.db
+liked_songs.db
 
 # demo files
 demo/
