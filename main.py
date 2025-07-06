@@ -2,7 +2,7 @@ from fastapi.exceptions import HTTPException
 import time
 from fastapi import FastAPI, Body, Query, Request
 from pydantic import BaseModel, Field
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote
 import re
 from typing import Optional, Any
 import subprocess
@@ -30,8 +30,17 @@ from contextlib import asynccontextmanager
 import signal
 from pathlib import Path
 
+from fastapi.responses import Response
+import shlex
+
+from mutagen import File as MutagenFile
+
+import requests
+
 MPD_PORT = "6601"
 version="0.1.0"
+
+player_type = ""
 
 config = load_config()
 spotify_mode = config["spotify_mode"]
@@ -74,7 +83,11 @@ player_info = PlayerInfo(
 )
 
 class MediaData(BaseModel):
-    url: str = Field(..., description="The URL of the media to play. Supported sources: YouTube, Spotify.")
+    url: Optional[str] = Field(None, description="The URL of the media to play. Supported sources: YouTube, Spotify.")
+    song_name : Optional[str] = Field(
+        None, 
+        description="Name of the song to search and play from YouTube if URL is not provided."
+    )
 
 # ------------ Lifespan handling ------------
 mpdris2_path = shutil.which("mpDris2")
@@ -159,6 +172,10 @@ auto_update_depth "0"
         "--port", f"{MPD_PORT}",
     ])
     print("✅ mpdirs2 started at http://<your-ip>:8080")
+    
+    global player_instance
+    if player_instance is not None:
+        player_instance = None
 
     yield  # App is now running
 
@@ -181,6 +198,9 @@ auto_update_depth "0"
             mpd_proc.kill()
             mpd_proc.wait()
         print("🛑 MPD stopped")
+        
+    if player_instance is not None:
+        player_instance = None
         
 # ----------------------------------------------------------------------------- #
 
@@ -338,12 +358,15 @@ def player_status():
     Get the current status of the media player.
     """
     global player_info
+    global player_type
+    global player_instance
+    
     
     if control_mode == "mpris":
-        player_info = get_playerctl_data("spotify")
+        
+        player_info = get_playerctl_data(player=player_type)
         return player_info
     else:
-        global player_instance
         
         if player_instance is not None:
             player_info.volume = int(player_instance.get_volume())
@@ -359,22 +382,68 @@ def play_media(MediaData: Optional[MediaData] = Body(None)):
     """
     global player_instance
     global player_info
+    global player_type
     
     # ----------------------------------- #
     
+    
     #  TODO IF player is already initialised then just play the media
     if control_mode == "mpris" and not MediaData:
-        control_playerctl("play-pause")
-        player_info =  get_playerctl_data()
+        print(f"▶️ PLAYER TYPE: {player_type}")
+        control_playerctl("play-pause", player=player_type)
+        player_info =  get_playerctl_data(player=player_type)
         return player_info
     else:
         if player_instance is not None and not MediaData:
             player_instance.play()
     
-    if MediaData is None or not MediaData.url:
-        raise HTTPException(status_code=400, detail="Media URL is required.")
+    if MediaData is None or (not MediaData.url and not MediaData.song_name):
+        raise HTTPException(status_code=400, detail="Media URL or song name is required.")
     
-    # TODO: Add MPRIS control here. (toggle)
+    # MPD HANDLING
+    if MediaData.song_name and not MediaData.url:
+        song_name = MediaData.song_name.strip()
+        print(f"🎵 MPD Song Name: '{song_name}'")
+
+        # Clear MPD playlist (optional)
+        subprocess.run(["mpc", f"--port={MPD_PORT}", "clear"], check=False)
+
+        # Try to find and add song by title
+        cmd = ["mpc", f"--port={MPD_PORT}", "findadd", "title", song_name]
+        print("🔧 Running command:", " ".join(shlex.quote(arg) for arg in cmd))
+
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        print("stdout:", result.stdout.strip())
+        print("stderr:", result.stderr.strip())
+
+        if result.returncode != 0:
+            raise HTTPException(status_code=404, detail=f"Song not found in MPD library: '{song_name}'")
+
+        # Stop any other players
+        control_playerctl("--player=mpv,spotify,mpd,firefox stop")
+        if player_instance is not None:
+            player_instance = None
+
+        # Play the added song
+        subprocess.run(["mpc", f"--port={MPD_PORT}", "play"], check=False)
+        
+        player_type = "mpd"
+
+        # Refresh player info from playerctl
+        player_info = get_playerctl_data(player=player_type)
+        
+        # WHY this way? bcoz when running the subprocess command, it returns blank.
+        if player_info.status != "playing":
+             raise HTTPException(status_code=404, detail=f"Song not found in MPD library: '{song_name}'")
+        else:
+            return player_info
+
+    
+    
+    
+    
+    # is paused state update. (toggle)
     if player_info.is_paused is True:
         player_info.is_paused = False
     
@@ -409,9 +478,13 @@ def play_media(MediaData: Optional[MediaData] = Body(None)):
                 
                 # UNLOAD PREVIOUS MEDIA IF ANY
                 player_instance = None
+                control_playerctl("--player=spotify,firefox,mpd stop")
+                
                 player_instance = MPVMediaPlayer(media.get("webpage_url"))
                 
                 player_info.volume = player_instance.get_volume()
+                
+                player_type = "mpv"
                 
                 
                 player_instance.play()
@@ -482,8 +555,17 @@ def play_media(MediaData: Optional[MediaData] = Body(None)):
         print(f"SPOTIFY TRACK ID: {track_id}")
         
         if spotify_mode == "sp_client":
+            # Stop Any previous playing media
+            control_playerctl("--player=mpv,spotify,mpd,firefox stop")
+            if player_instance is not None:
+                player_instance = None
+            
+            player_type = "spotify"
+            # OPEN SPOTIFY via xdg-open
             open_sp_client(track_id)
-            player_info = get_playerctl_data()
+            
+            player_info = get_playerctl_data(player=player_type)
+            
             return player_info
         else:
             # HANDLING SPOTIFY PLAYBACK with YT-DLP
@@ -531,8 +613,12 @@ def play_media(MediaData: Optional[MediaData] = Body(None)):
                     
                     
                     # UNLOAD PREVIOUS MEDIA IF ANY
+                    control_playerctl("--player=spotify,firefox,mpd stop")
                     player_instance = None
+                    
                     player_instance = MPVMediaPlayer(yt_url)
+                    
+                    player_type = "mpv"
                     player_instance.play()
                     
                     player_info.volume = player_instance.get_volume()
@@ -561,13 +647,15 @@ def play_media(MediaData: Optional[MediaData] = Body(None)):
 @app.post("/player/pause")
 def pause_player():
     global player_info
+    global player_type
+    global player_instance
+    
     
     if control_mode == "mpris":
-        control_playerctl("pause")
-        player_info = get_playerctl_data()
+        control_playerctl("pause", player=player_type)
+        player_info = get_playerctl_data(player=player_type)
         return player_info
     else:
-        global player_instance
         if player_instance is None:
             raise HTTPException(status_code=400, detail="No media is currently loaded")
         try:
@@ -586,13 +674,18 @@ def pause_player():
 @app.post("/player/stop")
 def stop_player():
     global player_info
+    global player_type
+    global player_instance
+    
     
     if control_mode == "mpris":
-        control_playerctl("stop")
+        player_type = ""
+        control_playerctl("--player=mpv,spotify,mpd,firefox  stop")
+        
+        # NOTE: May need specific, but player is empty now.
         player_info = get_playerctl_data()
         return player_info
     else:
-        global player_instance
         if player_instance is None:
             raise HTTPException(status_code=400, detail="No media is currently loaded")
         try:
@@ -643,6 +736,7 @@ def replay_player():
 @app.post("/player/volume")
 def set_volume(set: int = Query(..., ge=0, le=150, description="Volume percent (0-150)")):
     global player_info
+    global player_type
     
     if control_mode == "mpris":
         # control_playerctl("pause")
@@ -652,8 +746,8 @@ def set_volume(set: int = Query(..., ge=0, le=150, description="Volume percent (
         
         scaled_vol = set / 100
 
-        control_playerctl(f"volume {scaled_vol}")
-        player_info = get_playerctl_data()
+        control_playerctl(f"volume {scaled_vol}", player=player_type)
+        player_info = get_playerctl_data(player=player_type)
         return player_info
     else:
         global player_instance
@@ -672,8 +766,9 @@ def set_volume(set: int = Query(..., ge=0, le=150, description="Volume percent (
 
 @app.post("/player/next")
 def player_next():
+    global player_type
     if control_mode == "mpris":
-        control_playerctl("next")
+        control_playerctl("next", player=player_type)
         return {
             "message": "player next"
         }
@@ -682,8 +777,9 @@ def player_next():
     
 @app.post("/player/previous")
 def player_previous():
+    global player_type
     if control_mode == "mpris":
-        control_playerctl("previous")
+        control_playerctl("previous", player=player_type)
         return {
             "message": "player previous"
         }
@@ -802,3 +898,128 @@ def spotify_callback(request: Request):
 @app.get("/youtube")
 def yt_feed():
     pass
+
+@app.get("/songs")
+def list_songs():
+    try:
+        output = subprocess.check_output([
+            "mpc", "-h", "127.0.0.1", "-p", "6601",
+            "--format", "%file%|%title%|%artist%|%album%|%track%|%time%",
+            "listall"
+        ], text=True)
+    except subprocess.CalledProcessError as e:
+        return {"error": "Failed to query MPD", "details": str(e)}
+
+    project_dir = Path(__file__).resolve().parent
+    music_dir = (project_dir / "Music").resolve()
+    songs = []
+
+    for line in output.strip().split("\n"):
+        if not line.strip():
+            continue
+
+        parts = (line.split("|") + [""] * 6)[:6]
+        file_rel, title, artist, album, track, time_str = parts
+        file_path = music_dir / file_rel
+
+        # Fallback title
+        title = title or Path(file_rel).stem
+
+        # Get file size
+        try:
+            size_bytes = file_path.stat().st_size
+        except FileNotFoundError:
+            size_bytes = None
+
+        # Read metadata using Mutagen
+        duration = None
+        try:
+            audio = MutagenFile(file_path, easy=True)
+            if audio:
+                metadata = audio.tags or {}
+
+                artist = metadata.get('artist', [artist])[0] or None
+                album = metadata.get('album', [album])[0] or None
+                title = metadata.get('title', [title])[0] or title
+                track = metadata.get('tracknumber', [track])[0] or None
+
+                if hasattr(audio.info, 'length'):
+                    duration = int(audio.info.length)
+        except Exception:
+            # fallback to MPD's time
+            duration = int(time_str) if time_str.isdigit() else None
+
+        songs.append({
+            "file": file_rel,
+            "title": title,
+            "artist": artist,
+            "album": album,
+            "track": track,
+            "duration": duration,
+            "size_bytes": size_bytes,
+            "size_mb": round(size_bytes / (1024 * 1024), 2) if size_bytes else None
+        })
+
+    return {"songs": songs}
+
+@app.get("/album_art")
+def album_art():
+    global player_type
+
+    valid_states_by_player = {
+        "spotify": ["playing", "paused"],
+        "mpd": ["playing"],
+        "mpv": ["playing", "paused"]  # if supported via playerctl
+    }
+
+    valid_states = valid_states_by_player.get(player_type, [])
+
+    try:
+        status = subprocess.check_output(
+            ["playerctl", "--player=" + player_type, "status"],
+            text=True
+        ).strip().lower()
+        print(f"{player_type} status: {status}")
+
+        if status not in valid_states:
+            return {"error": f"{player_type} not in a valid state"}
+
+        url = subprocess.check_output(
+            ["playerctl", "--player=" + player_type, "metadata", "mpris:artUrl"],
+            text=True
+        ).strip()
+        print(f"{player_type} artUrl: {url}")
+
+        if url.startswith("file://"):
+            parsed = urlparse(url)
+            local_path = Path(unquote(parsed.path))
+            print(f"Trying local path: {local_path}")
+
+            if not local_path.exists():
+                return {"error": "File not found at local path"}
+
+            mime = "image/jpeg"
+            if local_path.suffix.lower() == ".png":
+                mime = "image/png"
+
+            return Response(content=local_path.read_bytes(), media_type=mime)
+
+        elif url.startswith("http"):
+            print(f"Downloading remote image from: {url}")
+            response = requests.get(url, timeout=5)
+
+            if response.status_code != 200:
+                return {"error": f"HTTP request failed with status: {response.status_code}"}
+
+            mime = response.headers.get("Content-Type", "image/jpeg")
+            return Response(content=response.content, media_type=mime)
+
+        else:
+            return {"error": f"Unrecognized art URL format: {url}"}
+
+    except subprocess.CalledProcessError as e:
+        print(f"{player_type} command failed: {e}")
+        return {"error": f"{player_type} command failed: {e}"}
+    except Exception as e:
+        print(f"Unexpected error for {player_type}: {e}")
+        return {"error": f"Unexpected error for {player_type}: {e}"}
