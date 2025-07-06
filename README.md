@@ -129,5 +129,11 @@ audio_output {
 # Needed Dependencies (incomplete)
 ```bash
 # Test These first.
-sudo pacman -S --needed mpd mpc mpdris2 playerctl ffmpeg yt-dlp spotdl mutagen 
+
+sudo pacman -Sy --needed mpd mpc mpdris2 playerctl ffmpeg yt-dlp
+
+uv tool install spotdl
+
+sudo pacman -Sy python-mutagen
 ```
+
