@@ -137,5 +137,7 @@ uv tool install spotdl
 sudo pacman -Sy python-mutagen
 
 yay -S spotify
+
+sudo pacman -S mpv-mpris
 ```
 
