@@ -6,6 +6,8 @@ from spotipy.oauth2 import SpotifyOAuth
 
 import subprocess
 
+import re
+
 from constants import AUTH_PATH, CONFIG_PATH, SPOTIFY_DB_PATH, SPOTIFY_SCOPES
 
 import socket
