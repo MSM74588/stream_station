@@ -46,6 +46,8 @@ from mutagen import File as MutagenFile
 
 import requests
 
+from fastapi.middleware.cors import CORSMiddleware
+
 # Create a global downloader instance
 yt_downloader = YTDLPDownloader()
 MUSIC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "Music"))
@@ -294,6 +296,14 @@ app = FastAPI(
     version=version,
     openapi_tags=tags_metadata,
     lifespan=lifespan
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # or ["http://localhost:3000"]
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Mount static directory for cover art
