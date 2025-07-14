@@ -300,10 +300,10 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # or ["http://localhost:3000"]
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=["*"],         # Allow all origins
+    allow_credentials=False,     # Must be False to use "*"
+    allow_methods=["*"],         # Allow all HTTP methods
+    allow_headers=["*"],         # Allow all headers
 )
 
 # Mount static directory for cover art
